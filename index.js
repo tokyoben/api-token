@@ -1,19 +1,21 @@
-(function() {
+(function () {
 
     var uuid = require('uuid');
 
     var users = [];
     var expirationTime = 1;
+    var db = null;
+
+
 
     /**
-     * User object
-     * @param token
-     * @param username
-     * @constructor
-     */
-    function User(token, username){
-        this.id = uuid.v4();
-		this.token = token;
+    * User object
+    * @param token
+    * @param username
+    * @constructor
+    */
+    function User(token, username) {
+        this.token = token;
         this.refreshed = null;
         //this.expires = null;
         this.username = username;
@@ -21,9 +23,9 @@
     }
 
     /**
-     * Refreshes token expiration time
-     */
-    User.prototype.refresh = function() {
+    * Refreshes token expiration time
+    */
+    User.prototype.refresh = function () {
         this.refreshed = new Date();
         /*this.expires = new Date();
         this.expires.setMinutes(this.expires.getMinutes()+1);
@@ -31,137 +33,169 @@
     }
 
     /**
-     * Checks if users token is valid
-     * @returns {boolean}
-     */
-    User.prototype.isValid=function(){
-        if(this.token==undefined){
+    * Checks if users token is valid
+    * @returns {boolean}
+    */
+    User.prototype.isValid = function () {
+        if (this.token == undefined) {
             return false;
-        }else{
+        } else {
+
             var exp = new Date(this.refreshed.getTime());
-            exp.setMinutes(exp.getMinutes()+expirationTime);
+            exp.setMinutes(exp.getMinutes() + expirationTime);
             // fast clicking may give wrong time somehow?
-            console.log('expires at ' + exp);
-            return (exp.getTime()>=(new Date()).getTime());
+            //console.log('expires at ' + exp);
+            return (exp.getTime() >= (new Date()).getTime());
+
         }
     }
-
-    /**
-     * Returns public version of the user, without token and expiration date
-     * @returns {{}}
-     */
-    User.prototype.toPublic = function(){
-        var result = {};
-        result.username = this.username;
-        result.id = this.id;
-        return result;
-    }
     /* Garbage collection -> removes expired users in every 10 minutes*/
-    setInterval(function(){
-        users = users.filter(function(item){
+    setInterval(function () {
+
+        //here just get a list of all objects
+        //iterate and call remove on each one
+
+        for (var i = 0; i < users.length; i++) {
+
+            if (!users[i].isValid) {
+
+                db.del(users[i].token + '_refreshed');
+                db.del(users[i].token + '_userid');
+                //db.del(users[i].username);
+
+            }
+
+        }
+
+        users = users.filter(function (item) {
             return item.isValid();
         });
         console.log("users");
         console.log(users);
-    }, 10*60*1000 /* debug 5*1000*/);
+    }, 10 * 60 * 1000 /* debug 5*1000*/);
+
+
 
     /**
-     * Finds user by token
-     * @param token
-     * @returns {User}
-     */
-    var findUserByToken = function (token){
-        var result = users.slice(0);
-        result = result.filter(function(item){
-            return (item.token == token);
+    * Removes user
+    * @param username
+    */
+    var removeUserByUsername = function (username) {
+
+
+        db.get(username, function (err, token) {
+
+            db.del(token + '_refreshed');
+            db.del(token + '_userid');
+            //db.del(username);
+            console.log('removed user ' + username);
         });
-        return result[0];
+
     }
 
     /**
-     * Finds user by username
-     * @param username
-     * @returns {User}
-     */
-    var findUserByUsername = function (username){
-        var result = users.slice(0);
-        result = result.filter(function(item){
-            return (item.username == username);
-        });
-        return result[0];
-    }
+    * Add user to pool
+    * @param token
+    * @param username
+    * @returns {User}
+    */
 
-    /**
-     * Removes user
-     * @param username
-     */
-    var removeUserByUsername = function(username){
-        users = users.filter(function(item){
-            return (item.username != username);
-        });
-    }
+    module.exports.addUser = function (username) {
 
-    /**
-     * Add user to pool
-     * @param token
-     * @param username
-     * @returns {User}
-     */
-    module.exports.addUser = function(username) {
         removeUserByUsername(username);
-        var user = new User(uuid.v4(), username);
+
+        var token = uuid.v4();
+        var user = new User(token, username);
         users.push(user);
+
+        db.set(token + '_userid', username);
+        db.set(token + '_refreshed', new Date());
+        //db.set(username, token);
+
         return user;
     }
 
     /**
-     * Removes user from pool
-     * @param username
-     */
-    module.exports.removeUser = function(username) {
+    * Removes user from pool
+    * @param username
+    */
+    module.exports.removeUser = function (username) {
         removeUserByUsername(username);
     }
 
     /**
-     * Checks if token is still valid
-     * @param token
-     * @returns {boolean}
-     */
-    module.exports.isTokenValid = function(token) {
-        var user = findUserByToken(token);
-        if( user!=undefined ){
-            var isValid = user.isValid();
-            if(isValid){
-                user.refresh();
-            }
-            return isValid;
-        }
-        return false;
+    * Checks if token is still valid
+    * @param token
+    * @returns {boolean}
+    */
+    module.exports.isTokenValid = function (token, callback) {
+
+        db.get(token + '_userid', function (err, userid) {
+
+            var user = new User(token, userid);
+
+            db.get(token + '_refreshed', function (err, refreshed) {
+
+                user.refreshed = new Date(refreshed);
+
+                var exp = new Date(user.refreshed.getTime());
+                exp.setMinutes(exp.getMinutes() + expirationTime);
+                // fast clicking may give wrong time somehow?
+                //console.log('expires at ' + exp);
+
+                var ret = exp.getTime() >= (new Date()).getTime();
+                return callback(ret);
+
+            });
+
+        });
+
+
+
     }
 
+    module.exports.setDb = function (database) {
+        db = database;
+    }
+
+
     /**
-     * Sets new expiration time for token
-     * @param time in minutes
-     */
-    module.exports.setExpirationTime = function(time) {
+    * Sets new expiration time for token
+    * @param time in minutes
+    */
+    module.exports.setExpirationTime = function (time) {
         expirationTime = time;
     }
 
     /**
-     * Finds user from valid users based on token
-     * @param token
-     * @returns {User}
-     */
-    module.exports.findUserByToken = function(token) {
-        return findUserByToken(token);
+    * Finds user from valid users based on token
+    * @param token
+    * @returns {User}
+    */
+    module.exports.findUserByToken = function (token, callback) {
+
+        db.get(token + '_userid', function (err, userid) {
+            var user = new User(token, userid);
+            user.refresh();
+
+            db.set(token + '_refreshed', new Date());
+
+            return callback(user);
+        });
+
     }
 
     /**
-     * Finds user from valid users based on username
-     * @param username
-     * @returns {User}
-     */
-    module.exports.findUserByUsername = function(username) {
-        return findUserByUsername(username);
+    * Finds user from valid users based on username
+    * @param username
+    * @returns {User}
+    */
+    module.exports.findUserByUsername = function (username) {
+
+        db.get(username, function (err, token) {
+            var user = new User(token, username);
+            return user;
+        });
+
     }
-}());
+} ());
